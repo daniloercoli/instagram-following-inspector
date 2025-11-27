@@ -36,11 +36,36 @@ document.addEventListener("DOMContentLoaded", () => {
     } else {
       notBack.forEach((u, idx) => {
         const li = document.createElement("li");
-        const fullName = u.full_name ? ` – ${u.full_name}` : "";
-        const orderInfo = typeof u._order === "number" ? ` (#${u._order + 1})` : "";
 
-        li.textContent = `${u.username}${fullName}${orderInfo}`;
+        // link cliccabile al profilo
+        const link = document.createElement("a");
+        link.href = `https://www.instagram.com/${u.username}/`;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = u.username;
+        li.appendChild(link);
 
+        // full name, se presente
+        if (u.full_name) {
+          const fullSpan = document.createElement("span");
+          fullSpan.textContent = ` – ${u.full_name}`;
+          li.appendChild(fullSpan);
+        }
+
+        // info "quando": usiamo l'ordine di follow (0 = più recente)
+        const meta = document.createElement("span");
+        meta.className = "meta";
+
+        if (typeof u._order === "number") {
+          // _order 0 = più recente, poi 1, 2, ...
+          const pos = u._order + 1;
+          meta.textContent = `• seguito come #${pos}`;
+        } else {
+          meta.textContent = "• ordine di follow sconosciuto";
+        }
+        li.appendChild(meta);
+
+        // tag "più recente" sul primo della lista
         const tag = document.createElement("span");
         tag.className = "tag";
         tag.textContent = idx === 0 ? "più recente" : "recenti";

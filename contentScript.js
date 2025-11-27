@@ -1,6 +1,115 @@
 const PAGE_SIZE = 100;
 const MAX_PAGES = 1000; // max 1000 pagine per tipo
 
+let igStatusModal = null;
+let igStatusLogEl = null;
+
+function ensureStatusModal() {
+  if (igStatusModal && igStatusLogEl) return;
+
+  igStatusModal = document.createElement("div");
+  igStatusModal.id = "ig-following-status-modal";
+
+  Object.assign(igStatusModal.style, {
+    position: "fixed",
+    right: "16px",
+    bottom: "16px",
+    width: "320px",
+    maxHeight: "50vh",
+    background: "rgba(17, 24, 39, 0.96)", // nero/grigio
+    color: "#e5e7eb",
+    borderRadius: "12px",
+    boxShadow: "0 10px 30px rgba(0,0,0,0.4)",
+    fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif',
+    fontSize: "12px",
+    zIndex: "9999999",
+    display: "flex",
+    flexDirection: "column",
+    overflow: "hidden"
+  });
+
+  const header = document.createElement("div");
+  Object.assign(header.style, {
+    padding: "8px 10px",
+    borderBottom: "1px solid rgba(55, 65, 81, 0.8)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between"
+  });
+
+  const title = document.createElement("div");
+  title.textContent = "IG Following Tool";
+  Object.assign(title.style, {
+    fontSize: "12px",
+    fontWeight: "600"
+  });
+
+  const closeBtn = document.createElement("button");
+  closeBtn.textContent = "×";
+  Object.assign(closeBtn.style, {
+    background: "transparent",
+    border: "none",
+    color: "#9ca3af",
+    cursor: "pointer",
+    fontSize: "14px",
+    lineHeight: "1"
+  });
+  closeBtn.addEventListener("click", () => {
+    igStatusModal.remove();
+    igStatusModal = null;
+    igStatusLogEl = null;
+  });
+
+  header.appendChild(title);
+  header.appendChild(closeBtn);
+
+  igStatusLogEl = document.createElement("pre");
+  igStatusLogEl.id = "ig-following-status-log";
+  Object.assign(igStatusLogEl.style, {
+    margin: "0",
+    padding: "8px 10px",
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
+    overflowY: "auto",
+    flex: "1"
+  });
+
+  igStatusModal.appendChild(header);
+  igStatusModal.appendChild(igStatusLogEl);
+  document.body.appendChild(igStatusModal);
+}
+
+function logToStatusModal(message) {
+  try {
+    ensureStatusModal();
+    const time = new Date().toLocaleTimeString();
+    const line = `[${time}] ${message}\n`;
+    igStatusLogEl.textContent += line;
+    igStatusLogEl.scrollTop = igStatusLogEl.scrollHeight;
+  } catch (e) {
+    console.error("Errore nel logToStatusModal", e);
+  }
+}
+
+function debugLog(...args) {
+  // log in console
+  console.log("[FollowingFetcher] ", ...args);
+
+  // log nella modale
+  const msg = args
+    .map(a => {
+      if (typeof a === "string") return a;
+      try {
+        return JSON.stringify(a);
+      } catch {
+        return String(a);
+      }
+    })
+    .join(" ");
+  logToStatusModal(msg);
+}
+
+
 function getCookie(name) {
   const value = `; ${document.cookie}`;
   const parts = value.split(`; ${name}=`);
@@ -14,8 +123,9 @@ function getCookie(name) {
 // Ascolta i messaggi dal background
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "FETCH_FOLLOWING") {
+    logToStatusModal("Avvio analisi: scarico following e followers, potrebbe volerci qualche secondo...");
     startFullProcess().catch(err => {
-      console.error("[FollowingFetcher] Errore:", err);
+      debugLog("Errore:", err?.message || String(err));
       chrome.runtime.sendMessage({
         type: "FOLLOWING_ERROR",
         error: err?.message || String(err)
@@ -26,6 +136,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "SHOW_ERROR") {
     if (message.message) {
       alert(message.message);
+      logToStatusModal("Errore: " + message.message);
     }
   }
 });
@@ -38,7 +149,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
  * - invio risultato al background
  */
 async function startFullProcess() {
-  console.log("[FollowingFetcher] Inizio processo completo (following + followers)...");
+  debugLog("Inizio processo completo (following + followers)...");
 
   const url = location.href;
   const match = url.match(/^https:\/\/www\.instagram\.com\/([^/]+)\/following\/?/i);
@@ -46,21 +157,21 @@ async function startFullProcess() {
     throw new Error("Non sembra una pagina /<username>/following/");
   }
   const username = match[1];
-  console.log("[FollowingFetcher] Username:", username);
+  debugLog("Username:", username);
 
   const userId = await getUserIdFromUsername(username);
   if (!userId) {
     throw new Error("Impossibile ottenere userId per " + username);
   }
-  console.log("[FollowingFetcher] userId:", userId);
+  debugLog("userId:", userId);
 
-  console.log("[FollowingFetcher] Scarico FOLLOWING...");
+  debugLog("Scarico FOLLOWING...");
   const followingResult = await fetchFollowing(userId);
-  console.log("[FollowingFetcher] FOLLOWING completato:", followingResult.totalUsers);
+  debugLog("FOLLOWING completato:", followingResult.totalUsers);
 
-  console.log("[FollowingFetcher] Scarico FOLLOWERS...");
+  debugLog("Scarico FOLLOWERS...");
   const followersResult = await fetchFollowers(userId);
-  console.log("[FollowingFetcher] FOLLOWERS completato:", followersResult.totalUsers);
+  debugLog("FOLLOWERS completato:", followersResult.totalUsers);
 
   // Match: chi seguo ma non mi segue
   const notFollowingBack = computeNotFollowingBack(followingResult.users, followersResult.users);
@@ -81,8 +192,8 @@ async function startFullProcess() {
     notFollowingBack
   };
 
-  console.log("[FollowingFetcher] Non mi seguono back:", notFollowingBack.length);
-
+  debugLog("Non mi seguono back:", notFollowingBack.length);
+  logToStatusModal("Analisi completata! Sto aprendo la pagina risultati…");
   chrome.runtime.sendMessage({
     type: "FOLLOWING_RESULTS",
     data: result
@@ -118,11 +229,11 @@ async function getUserIdFromUsername(username) {
     headers
   });
 
-  console.log("[FollowingFetcher] web_profile_info status:", res.status);
+  debugLog("web_profile_info status:", res.status);
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    console.error("[FollowingFetcher] web_profile_info non OK:", res.status, res.statusText, text);
+    debugLog("web_profile_info non OK:", res.status, res.statusText, text);
     throw new Error(`web_profile_info non OK: ${res.status}`);
   }
 
@@ -180,7 +291,7 @@ async function fetchFollowing(userId) {
       headers
     });
 
-    console.log("[FollowingFetcher] FOLLOWING status:", res.status);
+    debugLog("FOLLOWING status:", res.status);
 
     if (!res.ok) {
       const text = await res.text().catch(() => "");
@@ -203,12 +314,12 @@ async function fetchFollowing(userId) {
     hasMore = Boolean(data.has_more);
     nextMaxId = data.next_max_id;
 
-    console.log(
-      `[FollowingFetcher] FOLLOWING pagina ${pagesFetched} - users: ${users.length}, has_more: ${hasMore}, next_max_id: ${nextMaxId}`
+    debugLog(
+      `FOLLOWING pagina ${pagesFetched} - users: ${users.length}, has_more: ${hasMore}, next_max_id: ${nextMaxId}`
     );
 
     if (!hasMore) {
-      console.log("[FollowingFetcher] FOLLOWING: has_more=false, stop (lista completa).");
+      debugLog("FOLLOWING: has_more=false, stop (lista completa).");
       break;
     }
   }
@@ -269,7 +380,7 @@ async function fetchFollowers(userId) {
 
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      console.error("[FollowingFetcher] FOLLOWERS non OK:", res.status, res.statusText, text);
+      debugLog("FOLLOWERS non OK:", res.status, res.statusText, text);
       throw new Error(`FOLLOWERS risposta non OK: ${res.status}`);
     }
 
@@ -284,12 +395,12 @@ async function fetchFollowers(userId) {
     hasMore = Boolean(data.has_more);
     nextMaxId = data.next_max_id;
 
-    console.log(
-      `[FollowingFetcher] FOLLOWERS pagina ${pagesFetched} - users: ${users.length}, has_more: ${hasMore}, next_max_id: ${nextMaxId}`
+    debugLog(
+      `FOLLOWERS pagina ${pagesFetched} - users: ${users.length}, has_more: ${hasMore}, next_max_id: ${nextMaxId}`
     );
 
     if (!hasMore) {
-      console.log("[FollowingFetcher] FOLLOWERS: has_more=false, stop.");
+      debugLog("[FollowingFetcher] FOLLOWERS: has_more=false, stop.");
       break;
     }
   }

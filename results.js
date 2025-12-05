@@ -71,10 +71,103 @@ document.addEventListener("DOMContentLoaded", () => {
         tag.textContent = idx === 0 ? "più recente" : "recenti";
         li.appendChild(tag);
 
+        // Bottone Unfollow
+        const btn = document.createElement("button");
+        btn.textContent = "Unfollow";
+        btn.dataset.userId = String(u.pk); // ci serve per identificarlo dopo
+        btn.style.marginLeft = "8px";
+        btn.style.fontSize = "11px";
+        btn.style.padding = "2px 6px";
+        btn.style.borderRadius = "6px";
+        btn.style.border = "1px solid #ef4444";
+        btn.style.background = "#fee2e2";
+        btn.style.color = "#b91c1c";
+        btn.style.cursor = "pointer";
+
+        // helper per settare lo stato grafico
+        function setButtonState(button, state) {
+          if (state === "idle") {
+            button.disabled = false;
+            button.textContent = "Unfollow";
+            button.style.border = "1px solid #ef4444";
+            button.style.background = "#fee2e2";
+            button.style.color = "#b91c1c";
+            button.style.cursor = "pointer";
+          } else if (state === "busy") {
+            button.disabled = true;
+            button.textContent = "Unfollowing...";
+            button.style.border = "1px solid #9ca3af";
+            button.style.background = "#e5e7eb";
+            button.style.color = "#6b7280";
+            button.style.cursor = "default";
+          } else if (state === "done") {
+            button.disabled = true;
+            button.textContent = "Unfollowed";
+            button.style.border = "1px solid #9ca3af";
+            button.style.background = "#e5e7eb";
+            button.style.color = "#6b7280";
+            button.style.cursor = "default";
+          }
+        }
+
+        // stato iniziale
+        setButtonState(btn, "idle");
+
+        btn.addEventListener("click", () => {
+          if (btn.disabled) return; // doppio click extra-sicuro
+
+          const confirmMsg = `Vuoi davvero fare unfollow a @${u.username}?`;
+          if (!confirm(confirmMsg)) return;
+
+          setButtonState(btn, "busy");
+
+          chrome.runtime.sendMessage({
+            type: "UNFOLLOW_USER",
+            userId: u.pk,
+            username: u.username
+          });
+        });
+
+        li.appendChild(btn);
+
         nonBackListEl.appendChild(li);
-      });
+      })  ;
     }
 
     rawJsonEl.textContent = JSON.stringify(data, null, 2);
   });
+
+
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.type === "UNFOLLOW_DONE" || message.type === "UNFOLLOW_ERROR") {
+      const userId = String(message.userId);
+      const btn = document.querySelector(`button[data-user-id="${userId}"]`);
+      if (!btn) return;
+
+      if (message.type === "UNFOLLOW_DONE") {
+        // stato "OK"
+        btn.disabled = true;
+        btn.textContent = "Unfollowed";
+        btn.style.border = "1px solid #9ca3af";
+        btn.style.background = "#e5e7eb";
+        btn.style.color = "#6b7280";
+        btn.style.cursor = "default";
+      } else {
+        // errore: torna cliccabile e rosso
+        btn.disabled = false;
+        btn.textContent = "Unfollow";
+        btn.style.border = "1px solid #ef4444";
+        btn.style.background = "#fee2e2";
+        btn.style.color = "#b91c1c";
+        btn.style.cursor = "pointer";
+
+        if (message.error) {
+          alert(`Errore durante l'unfollow di @${message.username || ""}: ${message.error}`);
+        }
+      }
+    }
+  });
+
+
 });
+

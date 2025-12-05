@@ -90,4 +90,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "FOLLOWING_ERROR") {
     console.warn("[Background] Errore dal content script:", message.error);
   }
+
+  if (message.type === "UNFOLLOW_USER") {
+    const { userId, username } = message;
+    console.log("[Background] Richiesta di unfollow per", username, userId);
+
+    // Trova una tab instagram.com su cui è caricato il content script
+    chrome.tabs.query({ url: "https://www.instagram.com/*" }, (tabs) => {
+      if (!tabs || tabs.length === 0) {
+        console.warn("[Background] Nessuna tab instagram.com trovata per unfollow.");
+        return;
+      }
+
+      const targetTabId = tabs[0].id;
+
+      chrome.tabs.sendMessage(
+        targetTabId,
+        { type: "UNFOLLOW_USER", userId, username },
+        () => {
+          if (chrome.runtime.lastError) {
+            console.warn(
+              "[Background] Impossibile inviare UNFOLLOW_USER al content script:",
+              chrome.runtime.lastError.message
+            );
+          }
+        }
+      );
+    });
+  }
 });

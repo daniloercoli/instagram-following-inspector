@@ -1,5 +1,6 @@
 const PAGE_SIZE = 100;
 const MAX_PAGES = 1000; // max 1000 pagine per tipo
+const INSTAGRAM_WEB_APP_ID = "936619743392459";
 
 let igStatusModal = null;
 let igStatusLogEl = null;
@@ -136,6 +137,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
   }
 
+  if (message.type === "UNFOLLOW_USER") {
+    const { userId, username } = message;
+    logToStatusModal(`Unfollow @${username} (${userId}) in corso...`);
+    unfollowUser(userId, username).catch(err => {
+      debugLog("Errore unfollow", username, ":", err?.message || String(err));
+      logToStatusModal(`Errore unfollow @${username}: ${err?.message || err}`);
+    });
+  }
+
   if (message.type === "SHOW_ERROR") {
     if (message.message) {
       alert(message.message);
@@ -143,6 +153,75 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
   }
 });
+
+async function unfollowUser(userId, username) {
+  const csrftoken = getCookie("csrftoken");
+  const appId = "936619743392459";
+
+  const headers = {
+    "accept": "*/*",
+    "x-requested-with": "XMLHttpRequest",
+    "content-type": "application/x-www-form-urlencoded; charset=UTF-8"
+  };
+
+  if (csrftoken) {
+    headers["x-csrftoken"] = csrftoken;
+  }
+  if (appId) {
+    headers["x-ig-app-id"] = appId;
+  }
+
+  const url = `https://www.instagram.com/api/v1/friendships/destroy/${userId}/`;
+
+  debugLog("Unfollow fetch:", url, headers);
+
+  const body = new URLSearchParams();
+  body.set("user_id", String(userId));
+
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      credentials: "include",
+      headers,
+      body
+    });
+
+    debugLog("Unfollow status", res.status);
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      debugLog("Unfollow non OK per", username, ":", res.status, text);
+      chrome.runtime.sendMessage({
+        type: "UNFOLLOW_ERROR",
+        userId,
+        username,
+        error: `HTTP ${res.status}`
+      });
+      throw new Error(`Unfollow non OK: ${res.status}`);
+    }
+
+    const json = await res.json().catch(() => ({}));
+    debugLog("Unfollow OK per", username, json);
+    logToStatusModal(`Unfollow completato per @${username}.`);
+
+    chrome.runtime.sendMessage({
+      type: "UNFOLLOW_DONE",
+      userId,
+      username
+    });
+  } catch (err) {
+    debugLog("Errore fetch unfollow per", username, ":", err?.message || String(err));
+    chrome.runtime.sendMessage({
+      type: "UNFOLLOW_ERROR",
+      userId,
+      username,
+      error: err?.message || String(err)
+    });
+    throw err;
+  }
+}
+
+
 
 function extractUsernameFromLocation() {
   const url = location.href;
@@ -241,7 +320,7 @@ async function startFullProcess(forcedUsername) {
  */
 async function getUserIdFromUsername(username) {
   const csrftoken = getCookie("csrftoken");
-  const appId = "936619743392459"; // app id web di Instagram (lo vedi anche nelle richieste in Network)
+  const appId = INSTAGRAM_WEB_APP_ID; // app id web di Instagram (lo vedi anche nelle richieste in Network)
 
   const url = `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`;
 
@@ -305,7 +384,7 @@ async function fetchFollowing(userId) {
     const apiUrl = `https://www.instagram.com/api/v1/friendships/${userId}/following/?` + params.toString();
 
     const csrftoken = getCookie("csrftoken");
-    const appId = "936619743392459";
+    const appId = INSTAGRAM_WEB_APP_ID;
 
     const headers = {
       "accept": "*/*",
@@ -390,7 +469,7 @@ async function fetchFollowers(userId) {
 
     // Anche qui usiamo solo getCookie per prendere il csrftoken
     const csrftoken = getCookie("csrftoken");
-    const appId = "936619743392459";
+    const appId = INSTAGRAM_WEB_APP_ID;
 
     const headers = {
       "accept": "*/*",

@@ -123,8 +123,11 @@ function getCookie(name) {
 // Ascolta i messaggi dal background
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "FETCH_FOLLOWING") {
-    logToStatusModal("Avvio analisi: scarico following e followers, potrebbe volerci qualche secondo...");
-    startFullProcess().catch(err => {
+    const forcedUsername = message.username || null;
+
+    logToStatusModal("Avvio analisi per il profilo " + (forcedUsername || "(da URL)") + "…");
+
+    startFullProcess(forcedUsername).catch(err => {
       debugLog("Errore:", err?.message || String(err));
       chrome.runtime.sendMessage({
         type: "FOLLOWING_ERROR",
@@ -141,6 +144,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
+function extractUsernameFromLocation() {
+  const url = location.href;
+  const m = url.match(/^https:\/\/www\.instagram\.com\/([^\/?#]+)\/?/i);
+  if (!m) return null;
+
+  const firstSegment = m[1].toLowerCase();
+  const reserved = new Set([
+    "explore",
+    "accounts",
+    "reels",
+    "p",
+    "stories",
+    "direct",
+    "tv",
+    "developer",
+    "about",
+    "legal"
+  ]);
+
+  if (reserved.has(firstSegment)) {
+    return null;
+  }
+
+  return m[1];
+}
+
 /**
  * Processo completo:
  * - username -> userId
@@ -148,16 +177,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
  * - match: chi seguo ma non mi segue
  * - invio risultato al background
  */
-async function startFullProcess() {
-  debugLog("Inizio processo completo (following + followers)...");
+async function startFullProcess(forcedUsername) {
+  debugLog("Inizio processo completo (following + followers)…");
 
-  const url = location.href;
-  const match = url.match(/^https:\/\/www\.instagram\.com\/([^/]+)\/following\/?/i);
-  if (!match) {
-    throw new Error("Non sembra una pagina /<username>/following/");
+  let username = forcedUsername;
+  if (!username) {
+    username = extractUsernameFromLocation();
   }
-  const username = match[1];
-  debugLog("Username:", username);
+
+  if (!username) {
+    throw new Error("Impossibile determinare lo username dalla URL. Sei su una pagina profilo?");
+  }
+
+  debugLog("Profilo rilevato:", username);
 
   const userId = await getUserIdFromUsername(username);
   if (!userId) {
@@ -173,8 +205,13 @@ async function startFullProcess() {
   const followersResult = await fetchFollowers(userId);
   debugLog("FOLLOWERS completato:", followersResult.totalUsers);
 
-  // Match: chi seguo ma non mi segue
-  const notFollowingBack = computeNotFollowingBack(followingResult.users, followersResult.users);
+  const notFollowingBack = computeNotFollowingBack(
+    followingResult.users,
+    followersResult.users
+  );
+
+  debugLog("Non mi seguono back:", notFollowingBack.length);
+  logToStatusModal("Analisi completata! Sto aprendo la pagina risultati…");
 
   const result = {
     username,
@@ -192,7 +229,6 @@ async function startFullProcess() {
     notFollowingBack
   };
 
-  debugLog("Non mi seguono back:", notFollowingBack.length);
   logToStatusModal("Analisi completata! Sto aprendo la pagina risultati…");
   chrome.runtime.sendMessage({
     type: "FOLLOWING_RESULTS",

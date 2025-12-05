@@ -1,30 +1,53 @@
+function extractUsernameFromUrl(url) {
+  const m = url.match(/^https:\/\/www\.instagram\.com\/([^\/?#]+)\/?/i);
+  if (!m) return null;
+
+  const firstSegment = m[1].toLowerCase();
+
+  // Segmenti "speciali" che NON sono username
+  const reserved = new Set([
+    "explore",
+    "accounts",
+    "reels",
+    "p",
+    "stories",
+    "direct",
+    "tv",
+    "developer",
+    "about",
+    "legal"
+  ]);
+
+  if (reserved.has(firstSegment)) {
+    return null;
+  }
+
+  return m[1]; // username così com'è (case sens.)
+}
+
 chrome.action.onClicked.addListener((tab) => {
   if (!tab || !tab.id) return;
 
   const url = tab.url || "";
 
-  // Deve essere su instagram.com
   const isInstagram = /^https:\/\/(www\.)?instagram\.com\//i.test(url);
-
   if (!isInstagram) {
     console.warn("[Background] Tab non è instagram.com, non mando messaggi al content script.");
     return;
   }
 
-  // Deve essere tipo: https://www.instagram.com/<username>/following/
-  const isFollowingPage = /^https:\/\/www\.instagram\.com\/[^/]+\/following\/?/i.test(url);
+  const username = extractUsernameFromUrl(url);
 
-  if (!isFollowingPage) {
-    // Proviamo a mostrare un piccolo avviso nella tab
+  if (!username) {
+    // Non siamo su una pagina profilo
     chrome.tabs.sendMessage(
       tab.id,
       {
         type: "SHOW_ERROR",
-        message: "Vai prima sulla pagina dei following: https://www.instagram.com/<username>/following/"
+        message: "Vai prima su una pagina profilo, ad es. https://www.instagram.com/<username>/"
       },
       () => {
         if (chrome.runtime.lastError) {
-          // Qui intercettiamo "Could not establish connection. Receiving end does not exist."
           console.warn(
             "[Background] Impossibile inviare SHOW_ERROR al content script:",
             chrome.runtime.lastError.message
@@ -35,10 +58,10 @@ chrome.action.onClicked.addListener((tab) => {
     return;
   }
 
-  // Chiedi al content script di iniziare il fetch
+  // Siamo su una pagina profilo: avvia il processo
   chrome.tabs.sendMessage(
     tab.id,
-    { type: "FETCH_FOLLOWING" },
+    { type: "FETCH_FOLLOWING", username },
     () => {
       if (chrome.runtime.lastError) {
         console.warn(
@@ -49,6 +72,7 @@ chrome.action.onClicked.addListener((tab) => {
     }
   );
 });
+
 
 // Riceve i risultati dal content script
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

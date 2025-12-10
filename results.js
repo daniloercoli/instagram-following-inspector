@@ -115,9 +115,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
         btn.addEventListener("click", () => {
           if (btn.disabled) return; // doppio click extra-sicuro
-
-          const confirmMsg = `Vuoi davvero fare unfollow a @${u.username}?`;
-          if (!confirm(confirmMsg)) return;
+        
+          // niente modale di conferma: parte subito
+        // const confirmMsg = `Vuoi davvero fare unfollow a @${u.username}?`;
+        // if (!confirm(confirmMsg)) return;
 
           setButtonState(btn, "busy");
 

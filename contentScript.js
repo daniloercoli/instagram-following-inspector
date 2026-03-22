@@ -360,6 +360,22 @@ async function getUserIdFromUsername(username) {
   return userId || null;
 }
 
+function mySleep(minMs = 2000, maxMs = 15000) {
+  const min = Number(minMs);
+  const max = Number(maxMs);
+
+  const safeMin = Number.isFinite(min) ? min : 2500;
+  const safeMax = Number.isFinite(max) ? max : 4500;
+
+  const low = Math.min(safeMin, safeMax);
+  const high = Math.max(safeMin, safeMax);
+
+  const delay = Math.floor(Math.random() * (high - low + 1)) + low;
+
+  debugLog(`[FollowingFetcher] Attendo ${delay} ms prima della prossima richiesta...`);
+
+  return new Promise(resolve => setTimeout(resolve, delay));
+}
 
 /**
  * Scarica il FOLLOWING con paginazione.
@@ -437,6 +453,8 @@ async function fetchFollowing(userId) {
       debugLog("FOLLOWING: has_more=false, stop (lista completa).");
       break;
     }
+
+    await mySleep();
   }
 
   return {
@@ -518,6 +536,8 @@ async function fetchFollowers(userId) {
       debugLog("[FollowingFetcher] FOLLOWERS: has_more=false, stop.");
       break;
     }
+
+    await mySleep();
   }
 
   return {

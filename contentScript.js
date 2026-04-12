@@ -1,6 +1,9 @@
 const PAGE_SIZE = 100;
 const MAX_PAGES = 1000; // max 1000 pagine per tipo
 const INSTAGRAM_WEB_APP_ID = "936619743392459";
+const PROFILE_REQUEST_DELAY_MS = [3000, 7000];
+const LIST_REQUEST_DELAY_MS = [4000, 10000];
+const UNFOLLOW_REQUEST_DELAY_MS = [6000, 12000];
 
 let igStatusModal = null;
 let igStatusLogEl = null;
@@ -17,7 +20,7 @@ function ensureStatusModal() {
     bottom: "16px",
     width: "320px",
     maxHeight: "50vh",
-    background: "rgba(17, 24, 39, 0.96)", // nero/grigio
+    background: "rgba(17, 24, 39, 0.96)",
     color: "#e5e7eb",
     borderRadius: "12px",
     boxShadow: "0 10px 30px rgba(0,0,0,0.4)",
@@ -93,10 +96,8 @@ function logToStatusModal(message) {
 }
 
 function debugLog(...args) {
-  // log in console
   console.log("[FollowingFetcher] ", ...args);
 
-  // log nella modale
   const msg = args
     .map(a => {
       if (typeof a === "string") return a;
@@ -110,7 +111,6 @@ function debugLog(...args) {
   logToStatusModal(msg);
 }
 
-
 function getCookie(name) {
   const value = `; ${document.cookie}`;
   const parts = value.split(`; ${name}=`);
@@ -120,8 +120,6 @@ function getCookie(name) {
   return null;
 }
 
-
-// Ascolta i messaggi dal background
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "FETCH_FOLLOWING") {
     const forcedUsername = message.username || null;
@@ -173,6 +171,8 @@ async function unfollowUser(userId, username) {
 
   const url = `https://www.instagram.com/api/v1/friendships/destroy/${userId}/`;
 
+  await mySleep(...UNFOLLOW_REQUEST_DELAY_MS);
+
   debugLog("Unfollow fetch:", url, headers);
 
   const body = new URLSearchParams();
@@ -221,8 +221,6 @@ async function unfollowUser(userId, username) {
   }
 }
 
-
-
 function extractUsernameFromLocation() {
   const url = location.href;
   const m = url.match(/^https:\/\/www\.instagram\.com\/([^\/?#]+)\/?/i);
@@ -249,13 +247,6 @@ function extractUsernameFromLocation() {
   return m[1];
 }
 
-/**
- * Processo completo:
- * - username -> userId
- * - fetch following + followers
- * - match: chi seguo ma non mi segue
- * - invio risultato al background
- */
 async function startFullProcess(forcedUsername) {
   debugLog("Inizio processo completo (following + followers)…");
 
@@ -270,6 +261,7 @@ async function startFullProcess(forcedUsername) {
 
   debugLog("Profilo rilevato:", username);
 
+  await mySleep(...PROFILE_REQUEST_DELAY_MS);
   const userId = await getUserIdFromUsername(username);
   if (!userId) {
     throw new Error("Impossibile ottenere userId per " + username);
@@ -308,19 +300,15 @@ async function startFullProcess(forcedUsername) {
     notFollowingBack
   };
 
-  logToStatusModal("Analisi completata! Sto aprendo la pagina risultati…");
   chrome.runtime.sendMessage({
     type: "FOLLOWING_RESULTS",
     data: result
   });
 }
 
-/**
- * Ottiene l'userId numerico partendo dallo username usando l'endpoint web_profile_info.
- */
 async function getUserIdFromUsername(username) {
   const csrftoken = getCookie("csrftoken");
-  const appId = INSTAGRAM_WEB_APP_ID; // app id web di Instagram (lo vedi anche nelle richieste in Network)
+  const appId = INSTAGRAM_WEB_APP_ID;
 
   const url = `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`;
 
@@ -335,8 +323,6 @@ async function getUserIdFromUsername(username) {
   if (csrftoken) {
     headers["x-csrftoken"] = csrftoken;
   }
-
-  console.log("[FollowingFetcher] Chiamo web_profile_info:", url, headers);
 
   const res = await fetch(url, {
     method: "GET",
@@ -353,9 +339,6 @@ async function getUserIdFromUsername(username) {
   }
 
   const json = await res.json();
-  console.log("[FollowingFetcher] web_profile_info risposta:", json);
-
-  // Struttura tipica: { data: { user: { id: "2610846455", ... } } }
   const userId = json?.data?.user?.id;
   return userId || null;
 }
@@ -372,16 +355,11 @@ function mySleep(minMs = 2000, maxMs = 15000) {
 
   const delay = Math.floor(Math.random() * (high - low + 1)) + low;
 
-  debugLog(`[FollowingFetcher] Attendo ${delay} ms prima della prossima richiesta...`);
+  debugLog(`Attendo ${delay} ms prima della prossima richiesta...`);
 
   return new Promise(resolve => setTimeout(resolve, delay));
 }
 
-/**
- * Scarica il FOLLOWING con paginazione.
- * Aggiungiamo un campo _order per rappresentare la "data" (ordine) del follow:
- *  - 0 = più recente, 1 = leggermente più vecchio, ecc.
- */
 async function fetchFollowing(userId) {
   const allUsers = [];
   const rawResponses = [];
@@ -392,7 +370,7 @@ async function fetchFollowing(userId) {
 
   while (hasMore && pagesFetched < MAX_PAGES) {
     const params = new URLSearchParams();
-    params.set("count", String(PAGE_SIZE));  // ora 100
+    params.set("count", String(PAGE_SIZE));
     if (nextMaxId) {
       params.set("max_id", nextMaxId);
     }
@@ -414,8 +392,6 @@ async function fetchFollowing(userId) {
       headers["x-ig-app-id"] = appId;
     }
 
-    console.log(`[FollowingFetcher] FOLLOWING pagina ${pagesFetched + 1}:`, apiUrl, headers);
-
     const res = await fetch(apiUrl, {
       method: "GET",
       credentials: "include",
@@ -435,7 +411,6 @@ async function fetchFollowing(userId) {
 
     const users = data.users || [];
     users.forEach(u => {
-      // _order ci serve per l’ordinamento “più recente”
       const enriched = { ...u, _order: globalIndex++ };
       allUsers.push(enriched);
     });
@@ -454,7 +429,7 @@ async function fetchFollowing(userId) {
       break;
     }
 
-    await mySleep();
+    await mySleep(...LIST_REQUEST_DELAY_MS);
   }
 
   return {
@@ -465,9 +440,6 @@ async function fetchFollowing(userId) {
   };
 }
 
-/**
- * Scarica i FOLLOWERS con paginazione.
- */
 async function fetchFollowers(userId) {
   const allUsers = [];
   const rawResponses = [];
@@ -485,7 +457,6 @@ async function fetchFollowers(userId) {
 
     const apiUrl = `https://www.instagram.com/api/v1/friendships/${userId}/followers/?` + params.toString();
 
-    // Anche qui usiamo solo getCookie per prendere il csrftoken
     const csrftoken = getCookie("csrftoken");
     const appId = INSTAGRAM_WEB_APP_ID;
 
@@ -501,15 +472,13 @@ async function fetchFollowers(userId) {
       headers["x-ig-app-id"] = appId;
     }
 
-    console.log(`[FollowingFetcher] FOLLOWERS pagina ${pagesFetched + 1}:`, apiUrl, headers);
-
     const res = await fetch(apiUrl, {
       method: "GET",
       credentials: "include",
       headers
     });
 
-    console.log("[FollowingFetcher] FOLLOWERS status:", res.status);
+    debugLog("FOLLOWERS status:", res.status);
 
     if (!res.ok) {
       const text = await res.text().catch(() => "");
@@ -533,11 +502,11 @@ async function fetchFollowers(userId) {
     );
 
     if (!hasMore) {
-      debugLog("[FollowingFetcher] FOLLOWERS: has_more=false, stop.");
+      debugLog("FOLLOWERS: has_more=false, stop.");
       break;
     }
 
-    await mySleep();
+    await mySleep(...LIST_REQUEST_DELAY_MS);
   }
 
   return {
@@ -548,11 +517,6 @@ async function fetchFollowers(userId) {
   };
 }
 
-/**
- * Calcola gli utenti che io seguo (following) ma che non mi seguono (followers).
- * - Usa pk (id numerico) per matchare.
- * - Ordina per _order crescente (cioè: più recente prima).
- */
 function computeNotFollowingBack(followingUsers, followersUsers) {
   const followerIds = new Set(
     (followersUsers || []).map(u => String(u.pk))
@@ -563,7 +527,6 @@ function computeNotFollowingBack(followingUsers, followersUsers) {
     return !followerIds.has(id);
   });
 
-  // Ordina per _order (più piccolo = più recente, in base all'ordine di Instagram)
   notBack.sort((a, b) => {
     const oa = typeof a._order === "number" ? a._order : Number.MAX_SAFE_INTEGER;
     const ob = typeof b._order === "number" ? b._order : Number.MAX_SAFE_INTEGER;

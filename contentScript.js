@@ -306,7 +306,63 @@ async function startFullProcess(forcedUsername) {
   });
 }
 
+function normalizeUserId(value) {
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && value > 0 ? String(value) : null;
+  }
+  return typeof value === "string" && /^[1-9]\d*$/.test(value) ? value : null;
+}
+
+function findUserIdInPageData(data, username) {
+  const expectedUsername = username.toLowerCase();
+  const pending = [data];
+
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (!value || typeof value !== "object") continue;
+
+    // Match the username and ID on the same object: the page also contains
+    // the logged-in viewer, suggested accounts, and authors of other posts.
+    if (typeof value.username === "string" && value.username.toLowerCase() === expectedUsername) {
+      const userId = normalizeUserId(value.pk) || normalizeUserId(value.id);
+      if (userId) return userId;
+    }
+
+    for (const child of Object.values(value)) {
+      pending.push(child);
+    }
+  }
+
+  return null;
+}
+
+function getUserIdFromPage(username) {
+  // Instagram embeds PolarisViewer and preloaded profile data in JSON script
+  // elements. Reading their text also works in the content script's isolated world.
+  for (const script of document.querySelectorAll('script[type="application/json"]')) {
+    let data;
+    try {
+      data = JSON.parse(script.textContent);
+    } catch {
+      continue;
+    }
+
+    const userId = findUserIdInPageData(data, username);
+    if (userId) return userId;
+  }
+
+  return null;
+}
+
 async function getUserIdFromUsername(username) {
+  const pageUserId = getUserIdFromPage(username);
+  if (pageUserId) {
+    debugLog(`userId trovato nei dati della pagina per @${username}: ${pageUserId}`);
+    return pageUserId;
+  }
+
+  debugLog("userId non presente nei dati della pagina; provo web_profile_info...");
+
   const csrftoken = getCookie("csrftoken");
   const appId = INSTAGRAM_WEB_APP_ID;
 
@@ -333,14 +389,18 @@ async function getUserIdFromUsername(username) {
   debugLog("web_profile_info status:", res.status);
 
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    debugLog("web_profile_info non OK:", res.status, res.statusText, text);
+    if (res.status === 429) {
+      throw new Error("Instagram limita il recupero del profilo (HTTP 429). Riprova più tardi.");
+    }
     throw new Error(`web_profile_info non OK: ${res.status}`);
   }
 
   const json = await res.json();
-  const userId = json?.data?.user?.id;
-  return userId || null;
+  const user = json?.data?.user;
+  if (typeof user?.username === "string" && user.username.toLowerCase() !== username.toLowerCase()) {
+    throw new Error("Instagram ha restituito un profilo diverso da quello richiesto.");
+  }
+  return normalizeUserId(user?.pk) || normalizeUserId(user?.id);
 }
 
 function mySleep(minMs = 2000, maxMs = 15000) {

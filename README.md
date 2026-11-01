@@ -35,6 +35,9 @@ This extension was created to fill that gap by offering a fast, local, transpare
 
 The extension will appear in your Chrome toolbar immediately.
 
+After updating the source files, click **Reload** for the extension on
+`chrome://extensions/`, then reload the Instagram tab before testing again.
+
 ---
 
 ## 📖 Usage
@@ -75,7 +78,22 @@ This tool operates fully client-side.
 
 - You must be **logged into Instagram** in Chrome  
 - The extension works only when used on an Instagram profile page  
+- The profile ID is read from embedded page data when the username matches.
+  If no matching ID is available, the extension falls back to `web_profile_info`.
+  An HTTP 429 on that request stops the analysis with a short message.
 - Excessive unfollow actions may trigger Instagram rate-limits — use responsibly
+
+---
+
+## Local checks
+
+Run the profile ID regression tests with Node.js (no dependencies required):
+
+```bash
+node --test tests/profile-user-id.test.cjs
+```
+
+The tests use simulated page data and network responses; they do not contact Instagram.
 
 ---
 

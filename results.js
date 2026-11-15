@@ -12,6 +12,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const bulkStatusEl = document.getElementById("bulk-status");
 
   const buttonStateByUserId = new Map();
+  const buttonsByUserId = new Map();
   let bulkButton = null;
   let bulkRunning = false;
 
@@ -25,12 +26,12 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!button) return;
 
     if (state === "idle") {
-      button.disabled = false;
+      button.disabled = bulkRunning;
       button.textContent = "Unfollow";
       button.style.border = "1px solid #ef4444";
       button.style.background = "#fee2e2";
       button.style.color = "#b91c1c";
-      button.style.cursor = "pointer";
+      button.style.cursor = bulkRunning ? "default" : "pointer";
     } else if (state === "busy") {
       button.disabled = true;
       button.textContent = "Unfollowing...";
@@ -49,6 +50,10 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function setBulkButtonState(state, count = 0) {
+    bulkRunning = state === "busy";
+    for (const [userId, button] of buttonsByUserId) {
+      setButtonState(button, buttonStateByUserId.get(userId) || "idle");
+    }
     if (!bulkButton) return;
 
     if (state === "idle") {
@@ -61,7 +66,7 @@ document.addEventListener("DOMContentLoaded", () => {
       bulkRunning = false;
     } else if (state === "busy") {
       bulkButton.disabled = true;
-      bulkButton.textContent = "Unfollow automatico in corso...";
+      bulkButton.textContent = "Unfollow in corso...";
       bulkButton.style.background = "#e5e7eb";
       bulkButton.style.color = "#6b7280";
       bulkButton.style.border = "1px solid #9ca3af";
@@ -76,6 +81,22 @@ document.addEventListener("DOMContentLoaded", () => {
       bulkButton.style.cursor = "default";
       bulkRunning = false;
     }
+  }
+
+  function getRemainingCount() {
+    return [...buttonStateByUserId.values()].filter(state => state !== "done").length;
+  }
+
+  function sendUnfollowRequest(message, onRejected = () => {}) {
+    chrome.runtime.sendMessage(message, response => {
+      const error = chrome.runtime.lastError?.message ||
+        (response?.accepted ? null : response?.error || "Impossibile avviare la coda unfollow.");
+      if (!error) return;
+
+      onRejected();
+      setBulkButtonState(response?.running ? "busy" : "idle", getRemainingCount());
+      setBulkStatus(error, true);
+    });
   }
 
   function createBulkControls(notBack) {
@@ -96,15 +117,15 @@ document.addEventListener("DOMContentLoaded", () => {
     bulkButton.addEventListener("click", () => {
       if (bulkRunning || notBack.length === 0) return;
 
-      const users = notBack.map(u => ({
-        userId: String(u.pk),
-        username: u.username
-      }));
+      const users = notBack
+        .filter(u => buttonStateByUserId.get(String(u.pk)) !== "done")
+        .map(u => ({ userId: String(u.pk), username: u.username }));
+      if (users.length === 0) return;
 
       setBulkButtonState("busy");
       setBulkStatus(`Coda avviata: ${users.length} unfollow da eseguire con pausa tra una richiesta e l'altra.`);
 
-      chrome.runtime.sendMessage({
+      sendUnfollowRequest({
         type: "START_BULK_UNFOLLOW",
         users
       });
@@ -185,18 +206,20 @@ document.addEventListener("DOMContentLoaded", () => {
 
         setButtonState(btn, "idle");
         buttonStateByUserId.set(String(u.pk), "idle");
+        buttonsByUserId.set(String(u.pk), btn);
 
         btn.addEventListener("click", () => {
-          if (btn.disabled) return;
+          if (bulkRunning || btn.disabled) return;
           setButtonState(btn, "busy");
           buttonStateByUserId.set(String(u.pk), "busy");
+          setBulkButtonState("busy");
           setBulkStatus(`Invio unfollow singolo per @${u.username}...`);
 
-          chrome.runtime.sendMessage({
+          sendUnfollowRequest({
             type: "UNFOLLOW_USER",
             userId: String(u.pk),
             username: u.username
-          });
+          }, () => buttonStateByUserId.set(String(u.pk), "idle"));
         });
 
         li.appendChild(btn);
@@ -222,7 +245,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (message.type === "BULK_UNFOLLOW_PROGRESS") {
       if (message.userId) {
-        const btn = document.querySelector(`button[data-user-id="${String(message.userId)}"]`);
+        const btn = buttonsByUserId.get(String(message.userId));
         if (btn && message.phase === "dispatching") {
           setButtonState(btn, "busy");
           buttonStateByUserId.set(String(message.userId), "busy");
@@ -239,11 +262,12 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     if (message.type === "BULK_UNFOLLOW_FINISHED") {
-      setBulkButtonState("done");
+      const remaining = getRemainingCount();
+      setBulkButtonState(remaining > 0 ? "idle" : "done", remaining);
       setBulkStatus(
         message.error
-          ? `Coda terminata con errore finale: ${message.error}`
-          : `Coda completata. Operazioni concluse: ${message.total || 0}.`,
+          ? `Coda interrotta: ${message.succeeded || 0} confermati, ${message.failed || 0} non confermati, ${message.remaining || 0} non eseguiti. ${message.error}`
+          : `Coda completata. Unfollow confermati: ${message.succeeded || 0}/${message.total || 0}.`,
         Boolean(message.error)
       );
       return;
@@ -251,7 +275,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (message.type === "UNFOLLOW_DONE" || message.type === "UNFOLLOW_ERROR") {
       const userId = String(message.userId);
-      const btn = document.querySelector(`button[data-user-id="${userId}"]`);
+      const btn = buttonsByUserId.get(userId);
       if (!btn) return;
 
       if (message.type === "UNFOLLOW_DONE") {

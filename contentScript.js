@@ -4,6 +4,7 @@ const INSTAGRAM_WEB_APP_ID = "936619743392459";
 const PROFILE_REQUEST_DELAY_MS = [3000, 7000];
 const LIST_REQUEST_DELAY_MS = [4000, 10000];
 const UNFOLLOW_REQUEST_DELAY_MS = [6000, 12000];
+const UNFOLLOW_TIMEOUT_MS = 15000;
 
 let igStatusModal = null;
 let igStatusLogEl = null;
@@ -138,10 +139,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "UNFOLLOW_USER") {
     const { userId, username } = message;
     logToStatusModal(`Unfollow @${username} (${userId}) in corso...`);
-    unfollowUser(userId, username).catch(err => {
-      debugLog("Errore unfollow", username, ":", err?.message || String(err));
-      logToStatusModal(`Errore unfollow @${username}: ${err?.message || err}`);
-    });
+    unfollowUser(userId, username).then(
+      () => sendResponse({ ok: true }),
+      err => {
+        const error = err?.message || String(err);
+        debugLog(`Errore unfollow @${username}:`, error);
+        sendResponse({ ok: false, error });
+      }
+    );
+    // Keep the channel open until the HTTP response has been validated.
+    return true;
   }
 
   if (message.type === "SHOW_ERROR") {
@@ -152,72 +159,100 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-async function unfollowUser(userId, username) {
-  const csrftoken = getCookie("csrftoken");
-  const appId = "936619743392459";
+function getUnfollowContext(userId) {
+  return new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      reject(new Error("Unfollow non inviato: timeout nella lettura del contesto Instagram. Ricarica la pagina."));
+    }, UNFOLLOW_TIMEOUT_MS);
+    try {
+      chrome.runtime.sendMessage({ type: "GET_UNFOLLOW_CONTEXT", userId }, response => {
+        clearTimeout(timeoutId);
+        if (chrome.runtime.lastError) {
+          reject(new Error("Unfollow non inviato: ricarica estensione e pagina Instagram."));
+        } else if (response?.ok !== true) {
+          reject(new Error(response?.error || "Unfollow non inviato: contesto Instagram non disponibile."));
+        } else {
+          resolve(response);
+        }
+      });
+    } catch {
+      clearTimeout(timeoutId);
+      reject(new Error("Unfollow non inviato: ricarica estensione e pagina Instagram."));
+    }
+  });
+}
 
+async function unfollowUser(userId, username) {
+  userId = normalizeUserId(userId);
+  if (!userId) throw new Error("ID utente non valido per l'unfollow.");
+
+  await mySleep(...UNFOLLOW_REQUEST_DELAY_MS);
+  // Leggiamo i valori dopo l'attesa e per ogni richiesta, così la coda non
+  // riutilizza token o informazioni di navigazione delle richieste precedenti.
+  const context = await getUnfollowContext(userId);
   const headers = {
     "accept": "*/*",
     "x-requested-with": "XMLHttpRequest",
-    "content-type": "application/x-www-form-urlencoded; charset=UTF-8"
+    "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+    ...context.headers
   };
-
-  if (csrftoken) {
-    headers["x-csrftoken"] = csrftoken;
-  }
-  if (appId) {
-    headers["x-ig-app-id"] = appId;
-  }
-
   const url = `https://www.instagram.com/api/v1/friendships/destroy/${userId}/`;
 
-  await mySleep(...UNFOLLOW_REQUEST_DELAY_MS);
+  debugLog(`Unfollow fetch per @${username}:`, url);
+  debugLog("Unfollow parametri recuperati dalla pagina:", {
+    parametri: Object.keys(context.body),
+    headers: Object.keys(context.headers),
+    container_module: context.body.container_module
+  });
+  const body = new URLSearchParams(context.body);
+  body.set("user_id", userId);
 
-  debugLog("Unfollow fetch:", url, headers);
-
-  const body = new URLSearchParams();
-  body.set("user_id", String(userId));
-
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), UNFOLLOW_TIMEOUT_MS);
   try {
     const res = await fetch(url, {
       method: "POST",
       credentials: "include",
       headers,
-      body
+      body,
+      signal: controller.signal
     });
 
-    debugLog("Unfollow status", res.status);
+    debugLog(`Unfollow risposta HTTP per @${username}:`, {
+      status: res.status,
+      contentType: res.headers.get("content-type"),
+      url: res.url,
+      redirected: res.redirected
+    });
+
+    // Read once as text so a JSON parsing error cannot hide the original body.
+    const rawResponse = await res.text();
+    debugLog(`Unfollow risposta originale Instagram per @${username}:\n${rawResponse || "(corpo vuoto)"}`);
 
     if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      debugLog("Unfollow non OK per", username, ":", res.status, text);
-      chrome.runtime.sendMessage({
-        type: "UNFOLLOW_ERROR",
-        userId,
-        username,
-        error: `HTTP ${res.status}`
-      });
-      throw new Error(`Unfollow non OK: ${res.status}`);
+      throw new Error(`Unfollow non confermato: HTTP ${res.status}.`);
     }
 
-    const json = await res.json().catch(() => ({}));
-    debugLog("Unfollow OK per", username, json);
-    logToStatusModal(`Unfollow completato per @${username}.`);
+    let json;
+    try {
+      json = JSON.parse(rawResponse);
+    } catch {
+      throw new Error("Unfollow non confermato: Instagram ha restituito una risposta vuota o non JSON.");
+    }
 
-    chrome.runtime.sendMessage({
-      type: "UNFOLLOW_DONE",
-      userId,
-      username
-    });
+    if (json?.status !== "ok" || json?.friendship_status?.following !== false) {
+      const detail = typeof json?.message === "string" ? ` ${json.message}` : "";
+      throw new Error(`Unfollow non confermato: manca status=ok con friendship_status.following=false.${detail}`);
+    }
+
+    logToStatusModal(`Unfollow confermato da Instagram per @${username}.`);
   } catch (err) {
-    debugLog("Errore fetch unfollow per", username, ":", err?.message || String(err));
-    chrome.runtime.sendMessage({
-      type: "UNFOLLOW_ERROR",
-      userId,
-      username,
-      error: err?.message || String(err)
-    });
+    if (controller.signal.aborted) {
+      throw new Error("Timeout della richiesta unfollow: esito non verificato. Controlla il profilo prima di riprovare.");
+    }
     throw err;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 

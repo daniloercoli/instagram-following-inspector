@@ -5,7 +5,8 @@
   "description": "Clicca l'icona per leggere più pagine di following e mostrarle in una nuova tab.",
   "permissions": [
     "tabs",
-    "storage"
+    "storage",
+    "scripting"
   ],
   "host_permissions": [
     "https://www.instagram.com/*"

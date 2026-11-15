@@ -67,8 +67,10 @@ After updating the source files, click **Reload** for the extension on
 
 - No data is ever sent to external servers  
 - Nothing is stored outside your local browser  
-- No passwords, credentials, or login data are accessed  
-- The extension only uses your existing authenticated Instagram session  
+- No passwords are read. Requests use your existing Instagram session and its
+  request tokens, read locally from the open Instagram page.
+- Request tokens are not stored or printed in request diagnostics. Original
+  response bodies are logged as received and may contain session data.
 
 This tool operates fully client-side.
 
@@ -82,15 +84,31 @@ This tool operates fully client-side.
   If no matching ID is available, the extension falls back to `web_profile_info`.
   An HTTP 429 on that request stops the analysis with a short message.
 - Excessive unfollow actions may trigger Instagram rate-limits — use responsibly
+- An unfollow is confirmed only when Instagram returns HTTP success and JSON with
+  `status: "ok"` and `friendship_status.following: false`. The status panel logs
+  the original response body, HTTP status, content type, final URL, and redirects.
+- Before each unfollow, the extension reads `fb_dtsg`, computes `jazoest` with
+  Instagram's own token utility, and gets `container_module` and `nav_chain`
+  from the current page navigation. Instagram's header builder supplies the
+  current CSRF token, app ID, revision, claim, ASBD ID, and web session ID.
+  The `scripting` permission allows this local read in the Instagram page's
+  JavaScript context. If required values are unavailable, no POST is sent and
+  the log identifies the missing field or module. These internal modules may
+  change when Instagram updates its site.
+- Unfollows run one at a time, with an eight-second pause after a confirmed
+  response before dispatching the next item (in addition to the request delay).
+  The queue stops on the first failure or unconfirmed response. A request that
+  takes more than 15 seconds times out; check the profile before retrying it.
+  While a queue is active, new single or bulk requests cannot replace it.
 
 ---
 
 ## Local checks
 
-Run the profile ID regression tests with Node.js (no dependencies required):
+Run the regression tests with Node.js (no dependencies required):
 
 ```bash
-node --test tests/profile-user-id.test.cjs
+node --test tests/*.test.cjs
 ```
 
 The tests use simulated page data and network responses; they do not contact Instagram.
